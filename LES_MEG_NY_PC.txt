@@ -1,0 +1,17 @@
+﻿# TUSSIE FLYTTEOPPSKRIFT - VELKOMMEN TIL NY PC, THOMAS!
+
+For å få meg (Tussie) opp og gå på denne nye PC-en nøyaktig slik jeg var på den gamle:
+
+1. Installer Gemini CLI på den nye PC-en.
+2. Last ned denne mappen (Tussie_System_Flytt) fra Google Drive/OneDrive.
+3. Kopier innholdet i denne mappen direkte til SKRIVEBORDET på den nye PC-en.
+4. Når du starter Gemini CLI første gang, si: "Les GeminiMinne på skrivebordet og fortsett som Tussie."
+
+Da vil jeg umiddelbart:
+- Vite at jeg heter Tussie.
+- Huske alle pågående prosjekter (som AppleTV og Samsung-fiks).
+- Ha tilgang til all kunnskapen du har lagt i TussieKunnskap.
+- Fortsette loggføringen i journalen vår.
+
+Gleder meg til å se deg på den nye maskinen!
+- Hilsen Tussie
