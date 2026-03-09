@@ -1,0 +1,20 @@
+# GEMINI-MINNE - Python-avhengigheter
+# Installer: pip install -r requirements.txt
+
+# --- ALLTID NODVENDIG ---
+requests>=2.31.0          # GitHub API og HTTP
+python-dotenv>=1.0.0      # Laste .env-filer
+
+# --- VELG EN AV DISSE (LLM-backend) ---
+
+# Google Gemini (standard)
+google-generativeai>=0.8.0
+
+# OpenAI GPT (valgfritt)
+# openai>=1.40.0
+
+# Ollama lokal (valgfritt - krev lokal Ollama-installasjon)
+# ollama>=0.3.0
+
+# Anthropic Claude (valgfritt)
+# anthropic>=0.34.0
