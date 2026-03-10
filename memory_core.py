@@ -1,223 +1,188 @@
 #!/usr/bin/env python3
 """
-memory_core.py - Hjernen i gemini-minne
-Fotografisk hukommelse: lagrer ALT automatisk, strukturert som en menneskelig hjerne.
-
-Lag:
-  - Sensorisk minne   : rå input (siste sekunder)
-  - Korttidsminne     : aktiv kontekst (siste N meldinger)
-  - Langtidsminne     : permanent lagring (lokalt JSON + GitHub)
-  - Semantisk indeks  : vektorlignende nøkkelord-søk
+memory_core.py v2 - Avansert kognitiv arkitektur for AI
+Inkluderer: Vektorsøk-emulering, Memory Decay, Importance Scoring, og Kontekst-komprimering.
 """
-
 import json
 import os
 import re
 import hashlib
 import datetime
+import math
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, List, Dict
 
 MEMORY_DIR = Path(os.environ.get("MEMORY_DIR", "./minne"))
 SHORT_TERM_SIZE = int(os.environ.get("SHORT_TERM_SIZE", "20"))
-
+DECAY_FACTOR = float(os.environ.get("MEMORY_DECAY", "0.99")) # Minner mister verdi over tid
 
 class MemoryCore:
-    """Fotografisk hukommelse - fungerer som en menneskelig hjerne."""
-
     def __init__(self):
         self.memory_dir = MEMORY_DIR
         self._setup_dirs()
-        self.sensory    = []          # Sensorisk minne (flyktig)
-        self.short_term = self._load_short_term()  # Korttidsminne
-        self.long_term  = self._load_long_term()   # Langtidsminne
-        self.index      = self._build_index()      # Semantisk indeks
+        self.sensory = []
+        self.short_term = self._load_json("korttid/aktiv.json", [])
+        self.long_term = self._load_json("langtid/hoved.json", {})
+        self.facts = self._load_json("semantisk/fakta.json", {})
+        self.index = self._load_json("semantisk/indeks.json", {})
 
     def _setup_dirs(self):
-        for sub in ["korttid", "langtid", "episodisk", "semantisk", "prosedyre"]:
+        for sub in ["korttid", "langtid", "episodisk", "semantisk", "prosedyre", "arkiv"]:
             (self.memory_dir / sub).mkdir(parents=True, exist_ok=True)
 
-    # ---------- LAGRING ----------
+    def _load_json(self, path: str, default: Any) -> Any:
+        p = self.memory_dir / path
+        if p.exists():
+            try: return json.loads(p.read_text(encoding="utf-8"))
+            except: return default
+        return default
+
+    def _save_json(self, path: str, data: Any):
+        p = self.memory_dir / path
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def remember(self, content: str, meta: dict = None) -> str:
-        """Lagrer et minne automatisk - ingen manuell jobb."""
-        ts  = datetime.datetime.now().isoformat()
-        uid = hashlib.md5((content + ts).encode()).hexdigest()[:8]
+        ts = datetime.datetime.now().isoformat()
+        uid = hashlib.md5((content + ts).encode()).hexdigest()[:12]
+        
         entry = {
-            "id"       : uid,
+            "id": uid,
             "timestamp": ts,
-            "content"  : content,
-            "meta"     : meta or {},
-            "tags"     : self._extract_tags(content),
+            "content": content,
+            "meta": meta or {},
+            "tags": self._extract_tags(content),
             "importance": self._score_importance(content),
+            "access_count": 1,
+            "last_accessed": ts
         }
 
-        # 1. Sensorisk minne (RAM - flyktig)
+        # Sensorisk (flyktig)
         self.sensory.append(entry)
-        if len(self.sensory) > 5:
-            self.sensory.pop(0)
+        if len(self.sensory) > 10: self.sensory.pop(0)
 
-        # 2. Korttidsminne
+        # Korttid
         self.short_term.append(entry)
+        self._save_json("korttid/aktiv.json", self.short_term)
+
+        # Auto-konsolidering hvis full
         if len(self.short_term) > SHORT_TERM_SIZE:
-            # Konsolider til langtidsminne
             self._consolidate(self.short_term.pop(0))
-        self._save_short_term()
 
-        # 3. Oppdater semantisk indeks
         self._index_entry(entry)
-
         return uid
-
-    def remember_fact(self, key: str, value: Any, category: str = "generelt") -> str:
-        """Lagrer et faktum/kunnskap direkte i langtidsminnet."""
-        content = f"[FAKT:{category}] {key} = {value}"
-        uid = self.remember(content, meta={"type": "fakt", "key": key, "category": category})
-        # Lagre strukturert
-        facts_path = self.memory_dir / "semantisk" / "fakta.json"
-        facts = json.loads(facts_path.read_text()) if facts_path.exists() else {}
-        facts[key] = {"value": value, "category": category, "uid": uid,
-                      "updated": datetime.datetime.now().isoformat()}
-        facts_path.write_text(json.dumps(facts, ensure_ascii=False, indent=2))
-        return uid
-
-    def remember_episode(self, title: str, content: str) -> str:
-        """Lagrer en episode (hendelse/samtale)."""
-        ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = self.memory_dir / "episodisk" / f"{ts}_{title[:30]}.json"
-        episode = {
-            "title"    : title,
-            "timestamp": ts,
-            "content"  : content,
-            "tags"     : self._extract_tags(content),
-        }
-        path.write_text(json.dumps(episode, ensure_ascii=False, indent=2))
-        return self.remember(f"[EPISODE] {title}: {content[:200]}", meta={"type": "episode", "file": str(path)})
-
-    # ---------- HENTING ----------
-
-    def recall(self, query: str, n: int = 5) -> list:
-        """Henter relevante minner basert på spørring - automatisk."""
-        q_tags = set(self._extract_tags(query) + query.lower().split())
-        scored = []
-        for entry in list(self.long_term.values()) + self.short_term:
-            entry_tags = set(entry.get("tags", []) + entry.get("content", "").lower().split())
-            score = len(q_tags & entry_tags) + entry.get("importance", 0)
-            if score > 0:
-                scored.append((score, entry))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [e for _, e in scored[:n]]
-
-    def recall_fact(self, key: str) -> Optional[Any]:
-        """Henter et lagret faktum."""
-        facts_path = self.memory_dir / "semantisk" / "fakta.json"
-        if not facts_path.exists():
-            return None
-        facts = json.loads(facts_path.read_text())
-        return facts.get(key, {}).get("value")
-
-    def get_context(self, query: str = None) -> str:
-        """Bygger kontekst-streng for LLM - inkluderer relevante minner automatisk."""
-        lines = ["=== AKTIV HUKOMMELSE ==="]
-        # Korttidsminne
-        lines.append("\n--- Korttidsminne (nylig) ---")
-        for e in self.short_term[-5:]:
-            lines.append(f"[{e['timestamp'][:16]}] {e['content'][:200]}")
-        # Langtidsminne (relevant)
-        if query:
-            lines.append("\n--- Relevante langtidsminner ---")
-            for e in self.recall(query, n=5):
-                lines.append(f"[{e['timestamp'][:16]}] {e['content'][:200]}")
-        # Fakta
-        facts_path = self.memory_dir / "semantisk" / "fakta.json"
-        if facts_path.exists():
-            facts = json.loads(facts_path.read_text())
-            if facts:
-                lines.append("\n--- Kjente fakta ---")
-                for k, v in list(facts.items())[-10:]:
-                    lines.append(f"  {k} = {v['value']}")
-        return "\n".join(lines)
-
-    def get_short_context(self) -> list:
-        """Returnerer korttidsminne som liste (for chat-historikk)."""
-        return self.short_term[-SHORT_TERM_SIZE:]
-
-    # ---------- KONSOLIDERING ----------
-
-    def _consolidate(self, entry: dict):
-        """Overforer fra korttid til langtid (som søvn gjor for mennesker)."""
-        uid = entry["id"]
-        self.long_term[uid] = entry
-        self._save_long_term()
-
-    def consolidate_all(self):
-        """Tving konsolidering av alt korttidsminne."""
-        while self.short_term:
-            self._consolidate(self.short_term.pop(0))
-        self._save_short_term()
-        print("[Minne] All konsolidering fullfort.")
-
-    # ---------- INDEKS ----------
-
-    def _extract_tags(self, text: str) -> list:
-        """Trekker ut nøkkelord automatisk."""
-        words = re.findall(r'\b[a-zA-ZæøåÆØÅ]{3,}\b', text.lower())
-        stopwords = {"den", "det", "deg", "jeg", "er", "for", "som", "med",
-                     "til", "fra", "har", "kan", "vil", "ikke", "men", "the",
-                     "and", "or", "that", "this", "with", "for", "are"}
-        return list(set(w for w in words if w not in stopwords))[:20]
 
     def _score_importance(self, text: str) -> float:
-        """Scorer viktighet automatisk."""
-        score = 0.0
-        high = ["viktig", "husk", "aldri", "alltid", "kritisk", "must", "important",
-                "remember", "never", "always", "passord", "api", "nokkel", "key"]
-        for word in high:
-            if word in text.lower():
-                score += 1.0
-        score += min(len(text) / 500, 1.0)  # Lengde gir litt ekstra
+        score = 1.0
+        triggers = {
+            "viktig": 2.0, "husk": 2.0, "aldri": 1.5, "alltid": 1.5,
+            "passord": 5.0, "api": 4.0, "key": 4.0, "bruker": 1.2
+        }
+        for word, weight in triggers.items():
+            if word in text.lower(): score += weight
+        
+        # Lengde-bias (opp til 2.0 ekstra)
+        score += min(len(text) / 1000, 2.0)
         return round(score, 2)
 
+    def _extract_tags(self, text: str) -> List[str]:
+        words = re.findall(r'\b[a-zA-ZæøåÆØÅ]{4,}\b', text.lower())
+        stopwords = {"dette", "eller", "fordi", "skal", "ville", "når", "hvis"}
+        return list(set(w for w in words if w not in stopwords))[:15]
+
+    def _consolidate(self, entry: dict):
+        # Flytt til langtid med betydnings-sjekk
+        if entry["importance"] > 1.5 or entry["access_count"] > 1:
+            self.long_term[entry["id"]] = entry
+            self._save_json("langtid/hoved.json", self.long_term)
+        else:
+            # Arkiver uviktige minner i stedet for å slette
+            self._archive(entry)
+
+    def _archive(self, entry: dict):
+        date_str = entry["timestamp"][:10]
+        arch_path = f"arkiv/{date_str}.json"
+        arch = self._load_json(arch_path, [])
+        arch.append(entry)
+        self._save_json(arch_path, arch)
+
+    def recall(self, query: str, limit: int = 7) -> List[dict]:
+        q_tags = set(self._extract_tags(query) + query.lower().split())
+        scored = []
+        now = datetime.datetime.now()
+
+        # Søk i både korttid og langtid
+        candidates = self.short_term + list(self.long_term.values())
+        
+        for entry in candidates:
+            # 1. Semantisk likhet (tag overlap)
+            e_tags = set(entry.get("tags", []) + entry.get("content", "").lower().split())
+            tag_score = len(q_tags & e_tags) * 2.0
+            
+            # 2. Memory Decay (nyere minner er sterkere)
+            entry_time = datetime.datetime.fromisoformat(entry["timestamp"])
+            days_old = (now - entry_time).days
+            decay = math.pow(DECAY_FACTOR, days_old)
+            
+            # 3. Base importance + access frequency
+            importance = entry.get("importance", 1.0)
+            recency_bonus = 2.0 if days_old < 1 else 0.0
+            
+            final_score = (tag_score + importance) * decay + recency_bonus
+            
+            if final_score > 0.5:
+                scored.append((final_score, entry))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        results = [e for _, e in scored[:limit]]
+        
+        # Oppdater tilgangsstatistikk
+        for e in results:
+            e["access_count"] = e.get("access_count", 0) + 1
+            e["last_accessed"] = now.isoformat()
+            
+        return results
+
+    def get_context(self, query: str = None) -> str:
+        lines = ["### KOGNITIV KONTEKST ###"]
+        
+        # 1. Relevante fakta (Høyeste prioritet)
+        if query:
+            relevant_facts = [f"{k}: {v['value']}" for k, v in self.facts.items() if any(t in k.lower() or t in str(v['value']).lower() for t in query.lower().split())]
+            if relevant_facts:
+                lines.append("
+[FAKTA]")
+                lines.extend(relevant_facts[:5])
+
+        # 2. Relevante minner via Recall
+        if query:
+            memories = self.recall(query)
+            if memories:
+                lines.append("
+[RELEVANTE MINNER]")
+                for m in memories:
+                    lines.append(f"- ({m['timestamp'][:10]}) {m['content'][:300]}")
+
+        # 3. Siste korttid (nylig historikk)
+        lines.append("
+[NYLIG HISTORIKK]")
+        for m in self.short_term[-5:]:
+            lines.append(f"- {m['content'][:200]}")
+
+        return "
+".join(lines)
+
     def _index_entry(self, entry: dict):
-        idx_path = self.memory_dir / "semantisk" / "indeks.json"
-        idx = json.loads(idx_path.read_text()) if idx_path.exists() else {}
         for tag in entry.get("tags", []):
-            idx.setdefault(tag, []).append(entry["id"])
-        idx_path.write_text(json.dumps(idx, ensure_ascii=False, indent=2))
-
-    def _build_index(self) -> dict:
-        idx_path = self.memory_dir / "semantisk" / "indeks.json"
-        return json.loads(idx_path.read_text()) if idx_path.exists() else {}
-
-    # ---------- PERSISTENS ----------
-
-    def _load_short_term(self) -> list:
-        p = self.memory_dir / "korttid" / "aktiv.json"
-        return json.loads(p.read_text()) if p.exists() else []
-
-    def _save_short_term(self):
-        p = self.memory_dir / "korttid" / "aktiv.json"
-        p.write_text(json.dumps(self.short_term, ensure_ascii=False, indent=2))
-
-    def _load_long_term(self) -> dict:
-        p = self.memory_dir / "langtid" / "hoved.json"
-        return json.loads(p.read_text()) if p.exists() else {}
-
-    def _save_long_term(self):
-        p = self.memory_dir / "langtid" / "hoved.json"
-        p.write_text(json.dumps(self.long_term, ensure_ascii=False, indent=2))
-
-    # ---------- STATUS ----------
+            if tag not in self.index: self.index[tag] = []
+            if entry["id"] not in self.index[tag]:
+                self.index[tag].append(entry["id"])
+        self._save_json("semantisk/indeks.json", self.index)
 
     def status(self) -> dict:
         return {
-            "sensorisk"  : len(self.sensory),
-            "korttid"    : len(self.short_term),
-            "langtid"    : len(self.long_term),
-            "indeks_tags": len(self.index),
+            "sensory_buffer": len(self.sensory),
+            "short_term_active": len(self.short_term),
+            "long_term_total": len(self.long_term),
+            "semantic_tags": len(self.index),
+            "facts_known": len(self.facts)
         }
-
-    def wipe_short_term(self):
-        """Sletter korttidsminnet (som å glemme midlertidig)."""
-        self.short_term = []
-        self._save_short_term()
